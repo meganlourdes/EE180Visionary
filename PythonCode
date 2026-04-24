@@ -1,0 +1,76 @@
+import os
+import threading
+from http.server import SimpleHTTPRequestHandler, HTTPServer
+import serial
+import time
+
+SERIAL_PORT = "/dev/cu.usbserial-A5069RR4"
+BAUD_RATE = 115200
+HTTP_PORT = 8000
+
+def save_tts_wav(text, out_path="latest.wav"):
+    print(f"Generating WAV for: {text}")
+
+    safe_text = text.replace('"', '').strip()
+    aiff_path = "latest.aiff"
+
+    result1 = os.system(f'say "{safe_text}" -o {aiff_path}')
+    if result1 != 0:
+        print("say failed")
+        return False
+
+    result2 = os.system(
+        f'afconvert "{aiff_path}" "{out_path}" -f WAVE -d LEI16@16000 -c 1'
+    )
+    if result2 != 0:
+        print("afconvert failed")
+        return False
+
+    print(f"Saved {out_path}")
+    return True
+
+def start_server():
+    server = HTTPServer(("0.0.0.0", HTTP_PORT), SimpleHTTPRequestHandler)
+    print(f"Serving at http://0.0.0.0:{HTTP_PORT}")
+    server.serve_forever()
+
+# make sure a file exists before ESP32 asks for it
+if not save_tts_wav("System ready", "latest.wav"):
+    raise RuntimeError("Could not create initial WAV file")
+
+threading.Thread(target=start_server, daemon=True).start()
+
+try:
+    ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=1)
+    time.sleep(2)
+    ser.reset_input_buffer()
+    print(f"Opened serial on {SERIAL_PORT}")
+except Exception as e:
+    print(f"Could not open serial port: {e}")
+    raise
+
+print("\nPress ENTER to generate speech and play it on the ESP32 speaker.")
+
+while True:
+    try:
+        input()
+
+        text_to_say = "Meggy B and Soupy B on da Project"
+
+        if save_tts_wav(text_to_say, "latest.wav"):
+            time.sleep(0.2)
+            ser.write(b"PLAY_AUDIO\n")
+            print("Sent PLAY_AUDIO")
+
+        time.sleep(0.5)
+        while ser.in_waiting > 0:
+            line = ser.readline().decode(errors="ignore").strip()
+            if line:
+                print("Serial:", line)
+
+    except KeyboardInterrupt:
+        print("\nStopped.")
+        break
+    except Exception as e:
+        print("Error:", e)
+        time.sleep(1)
